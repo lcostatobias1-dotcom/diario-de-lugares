@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
-  FlatList,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,634 +11,859 @@ import {
   View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CameraView, useCameraPermissions, type CameraView as CameraViewType } from 'expo-camera';
 import * as Location from 'expo-location';
-import { StatusBar } from 'expo-status-bar';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 type Lugar = {
   id: string;
   titulo: string;
   descricao: string;
   foto: string;
-  latitude: number;
-  longitude: number;
   data: string;
+  latitude: number | null;
+  longitude: number | null;
 };
 
-const CHAVE = '@diario_de_lugares/registros';
-
-type Aba = 'registrar' | 'galeria';
-
 export default function App() {
-  const cameraRef = useRef<CameraViewType | null>(null);
-  const [permissaoCamera, pedirPermissaoCamera] = useCameraPermissions();
-  const [aba, setAba] = useState<Aba>('registrar');
-  const [cameraAberta, setCameraAberta] = useState(false);
-  const [cameraPronta, setCameraPronta] = useState(false);
-  const [foto, setFoto] = useState<string | null>(null);
+  const [tela, setTela] = useState<'registrar' | 'galeria'>('registrar');
+  const [lugares, setLugares] = useState<Lugar[]>([]);
   const [titulo, setTitulo] = useState('');
   const [descricao, setDescricao] = useState('');
-  const [coordenadas, setCoordenadas] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [carregandoLocalizacao, setCarregandoLocalizacao] = useState(false);
-  const [registros, setRegistros] = useState<Lugar[]>([]);
-  const [salvando, setSalvando] = useState(false);
+  const [foto, setFoto] = useState<string | null>(null);
+  const [coordenadas, setCoordenadas] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [cameraAberta, setCameraAberta] = useState(false);
   const [lugarSelecionado, setLugarSelecionado] = useState<Lugar | null>(null);
+  const [carregando, setCarregando] = useState(false);
+
+  const [permissaoCamera, solicitarPermissaoCamera] =
+    useCameraPermissions();
 
   useEffect(() => {
-    carregarRegistros();
+    carregarLugares();
   }, []);
 
-  async function carregarRegistros() {
+  async function carregarLugares() {
     try {
-      const dados = await AsyncStorage.getItem(CHAVE);
-      if (dados) setRegistros(JSON.parse(dados) as Lugar[]);
+      const dados = await AsyncStorage.getItem('@diario_lugares');
+
+      if (dados) {
+        setLugares(JSON.parse(dados));
+      }
     } catch {
-      Alert.alert('Erro', 'Não foi possível carregar os registros salvos.');
+      Alert.alert('Erro', 'Não foi possível carregar os registros.');
     }
   }
 
+  async function salvarNoArmazenamento(novosLugares: Lugar[]) {
+    await AsyncStorage.setItem(
+      '@diario_lugares',
+      JSON.stringify(novosLugares)
+    );
+
+    setLugares(novosLugares);
+  }
+
   async function obterLocalizacao() {
-    setCarregandoLocalizacao(true);
     try {
-      const permissao = await Location.requestForegroundPermissionsAsync();
-      if (!permissao.granted) {
-        Alert.alert('Permissão necessária', 'Permita o acesso à localização para registrar onde você está.');
+      const permissao =
+        await Location.requestForegroundPermissionsAsync();
+
+      if (permissao.status !== 'granted') {
+        setCoordenadas(null);
         return;
       }
 
-      const servicosAtivos = await Location.hasServicesEnabledAsync();
-      if (!servicosAtivos) {
-        Alert.alert('GPS desligado', 'Ative a localização nas configurações do Android e tente novamente.');
-        return;
-      }
+      const local = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
 
-      const local = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       setCoordenadas({
         latitude: local.coords.latitude,
         longitude: local.coords.longitude,
       });
-      Alert.alert('Localização obtida', 'A localização foi registrada para este lugar.');
     } catch {
-      Alert.alert(
-        'Não foi possível obter a localização',
-        'Confira se a localização está ativada no emulador e tente novamente.'
-      );
-    } finally {
-      setCarregandoLocalizacao(false);
+      setCoordenadas(null);
     }
   }
 
   async function abrirCamera() {
     if (!permissaoCamera?.granted) {
-      const resultado = await pedirPermissaoCamera();
+      const resultado = await solicitarPermissaoCamera();
+
       if (!resultado.granted) {
-        Alert.alert('Permissão necessária', 'Permita o acesso à câmera para fotografar um lugar.');
+        Alert.alert(
+          'Permissão necessária',
+          'Permita o acesso à câmera para fotografar um lugar.'
+        );
         return;
       }
     }
 
-    setFoto(null);
-    setCameraPronta(false);
     setCameraAberta(true);
   }
 
   async function tirarFoto() {
-    if (!cameraRef.current || !cameraPronta) {
-      Alert.alert('Aguarde', 'A câmera ainda está iniciando.');
-      return;
-    }
+    // A fotografia é capturada pelo componente CameraView.
+  }
 
+  const cameraRef = React.useRef<CameraView>(null);
+
+  async function capturarFoto() {
     try {
-      const resultado = await cameraRef.current.takePictureAsync({ quality: 0.7 });
-      if (resultado?.uri) {
-        setFoto(resultado.uri);
+      const imagem = await cameraRef.current?.takePictureAsync();
+
+      if (imagem?.uri) {
+        setFoto(imagem.uri);
         setCameraAberta(false);
       }
     } catch {
-      Alert.alert('Erro', 'Não foi possível tirar a foto. Tente novamente.');
+      Alert.alert('Erro', 'Não foi possível tirar a foto.');
     }
   }
 
   async function salvarRegistro() {
     if (!titulo.trim()) {
-      Alert.alert('Falta o título', 'Digite um nome para este lugar.');
+      Alert.alert('Atenção', 'Digite o nome do lugar.');
       return;
     }
 
     if (!foto) {
-      Alert.alert('Falta a foto', 'Tire uma foto do lugar antes de salvar.');
+      Alert.alert('Atenção', 'Tire uma foto antes de salvar.');
       return;
     }
 
-    if (!coordenadas) {
-      Alert.alert('Falta a localização', 'Toque em “Obter localização” antes de salvar.');
-      return;
-    }
-
-    setSalvando(true);
+    setCarregando(true);
 
     try {
-      const novo: Lugar = {
-        id: `${Date.now()}`,
+      let localizacao = coordenadas;
+
+      // A localização é opcional. Se falhar, o registro será salvo mesmo assim.
+      if (!localizacao) {
+        try {
+          const permissao =
+            await Location.getForegroundPermissionsAsync();
+
+          if (permissao.status === 'granted') {
+            const local = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+
+            localizacao = {
+              latitude: local.coords.latitude,
+              longitude: local.coords.longitude,
+            };
+          }
+        } catch {
+          localizacao = null;
+        }
+      }
+
+      const novoLugar: Lugar = {
+        id: Date.now().toString(),
         titulo: titulo.trim(),
         descricao: descricao.trim(),
         foto,
-        latitude: coordenadas.latitude,
-        longitude: coordenadas.longitude,
         data: new Date().toISOString(),
+        latitude: localizacao?.latitude ?? null,
+        longitude: localizacao?.longitude ?? null,
       };
 
-      const atualizados = [novo, ...registros];
+      const novosLugares = [novoLugar, ...lugares];
 
-      await AsyncStorage.setItem(CHAVE, JSON.stringify(atualizados));
+      await salvarNoArmazenamento(novosLugares);
 
-      setRegistros(atualizados);
       setTitulo('');
       setDescricao('');
       setFoto(null);
       setCoordenadas(null);
-      setCameraAberta(false);
-      setAba('galeria');
 
-      Alert.alert('Salvo!', 'O lugar foi adicionado à sua galeria.');
+      Alert.alert('Sucesso', 'Lugar registrado com sucesso!');
     } catch {
-      Alert.alert('Erro', 'Não foi possível salvar este lugar no celular.');
+      Alert.alert('Erro', 'Não foi possível salvar o registro.');
     } finally {
-      setSalvando(false);
+      setCarregando(false);
     }
   }
 
-  function excluirRegistro(id: string) {
-    Alert.alert('Excluir registro', 'Deseja apagar este lugar do diário?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Excluir',
-        style: 'destructive',
-        onPress: async () => {
-          const atualizados = registros.filter((item) => item.id !== id);
-          await AsyncStorage.setItem(CHAVE, JSON.stringify(atualizados));
-          setRegistros(atualizados);
-          setLugarSelecionado(null);
+  async function excluirLugar(id: string) {
+    Alert.alert(
+      'Excluir registro',
+      'Deseja realmente excluir este lugar?',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel',
         },
-      },
-    ]);
+        {
+          text: 'Excluir',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const novosLugares = lugares.filter(
+                (lugar) => lugar.id !== id
+              );
+
+              await salvarNoArmazenamento(novosLugares);
+              setLugarSelecionado(null);
+            } catch {
+              Alert.alert('Erro', 'Não foi possível excluir o registro.');
+            }
+          },
+        },
+      ]
+    );
   }
 
   function formatarData(data: string) {
-    return new Date(data).toLocaleString('pt-BR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    });
+    return new Date(data).toLocaleString('pt-BR');
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.tela}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <StatusBar style="dark" />
-
-      <View style={styles.topo}>
-        <Text style={styles.marca}>📍 Diário de Lugares</Text>
-        <Text style={styles.subtituloTopo}>Suas lembranças, em cada lugar.</Text>
+    <View style={styles.container}>
+      <View style={styles.cabecalho}>
+        <Text style={styles.tituloApp}>Diário de Lugares</Text>
+        <Text style={styles.subtitulo}>
+          Guarde as lembranças dos lugares que você visita.
+        </Text>
       </View>
 
-      <View style={styles.abas}>
+      <View style={styles.navegacao}>
         <TouchableOpacity
-          style={[styles.aba, aba === 'registrar' && styles.abaAtiva]}
-          onPress={() => setAba('registrar')}
+          style={[
+            styles.botaoNavegacao,
+            tela === 'registrar' && styles.botaoAtivo,
+          ]}
+          onPress={() => setTela('registrar')}
         >
-          <Text style={[styles.textoAba, aba === 'registrar' && styles.textoAbaAtiva]}>
-            ＋ Registrar
+          <Text
+            style={[
+              styles.textoNavegacao,
+              tela === 'registrar' && styles.textoAtivo,
+            ]}
+          >
+            Registrar
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.aba, aba === 'galeria' && styles.abaAtiva]}
-          onPress={() => setAba('galeria')}
+          style={[
+            styles.botaoNavegacao,
+            tela === 'galeria' && styles.botaoAtivo,
+          ]}
+          onPress={() => setTela('galeria')}
         >
-          <Text style={[styles.textoAba, aba === 'galeria' && styles.textoAbaAtiva]}>
-            ▦ Minha galeria ({registros.length})
+          <Text
+            style={[
+              styles.textoNavegacao,
+              tela === 'galeria' && styles.textoAtivo,
+            ]}
+          >
+            Minha galeria ({lugares.length})
           </Text>
         </TouchableOpacity>
       </View>
 
-      {aba === 'registrar' ? (
+      {tela === 'registrar' ? (
         <ScrollView
-          contentContainerStyle={styles.conteudo}
+          style={styles.conteudo}
+          contentContainerStyle={styles.conteudoInterno}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.introCartao}>
-            <Text style={styles.tituloTela}>Registre um momento</Text>
-            <Text style={styles.textoIntro}>
-              Tire uma foto, marque onde você está e guarde essa lembrança.
-            </Text>
-          </View>
+          <Text style={styles.tituloSecao}>Registrar um lugar</Text>
 
-          <View style={styles.cartao}>
-            <Text style={styles.rotulo}>Nome do lugar *</Text>
-            <TextInput
-              value={titulo}
-              onChangeText={setTitulo}
-              placeholder="Ex.: Praça central"
-              style={styles.input}
-              maxLength={70}
-            />
+          <Text style={styles.rotulo}>Nome do lugar *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Ex.: Parque da cidade"
+            value={titulo}
+            onChangeText={setTitulo}
+          />
 
-            <Text style={styles.rotulo}>Descrição / lembrança</Text>
-            <TextInput
-              value={descricao}
-              onChangeText={setDescricao}
-              placeholder="O que você quer lembrar deste lugar?"
-              style={[styles.input, styles.textarea]}
-              multiline
-              maxLength={300}
-            />
+          <Text style={styles.rotulo}>Descrição</Text>
+          <TextInput
+            style={[styles.input, styles.inputDescricao]}
+            placeholder="Conte um pouco sobre este lugar..."
+            value={descricao}
+            onChangeText={setDescricao}
+            multiline
+            textAlignVertical="top"
+          />
 
-            {cameraAberta ? (
-              <View>
-                <CameraView
-                  ref={cameraRef}
-                  style={styles.camera}
-                  facing="back"
-                  onCameraReady={() => setCameraPronta(true)}
-                />
+          <Text style={styles.rotulo}>Fotografia *</Text>
 
-                <TouchableOpacity style={styles.botaoPrincipal} onPress={tirarFoto}>
-                  <Text style={styles.textoBotaoPrincipal}>📸 Tirar foto</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.botaoClaro}
-                  onPress={() => setCameraAberta(false)}
-                >
-                  <Text style={styles.textoBotaoClaro}>Cancelar câmera</Text>
-                </TouchableOpacity>
-              </View>
-            ) : foto ? (
-              <View>
-                <Image source={{ uri: foto }} style={styles.fotoPreview} />
-
-                <TouchableOpacity style={styles.botaoClaro} onPress={abrirCamera}>
-                  <Text style={styles.textoBotaoClaro}>Tirar outra foto</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity style={styles.areaFoto} onPress={abrirCamera}>
-                <Text style={styles.iconeFoto}>📷</Text>
-                <Text style={styles.areaFotoTitulo}>Adicionar fotografia</Text>
-                <Text style={styles.areaFotoTexto}>Toque para abrir a câmera</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={[styles.botaoClaro, coordenadas && styles.botaoLocalOk]}
-              onPress={obterLocalizacao}
-              disabled={carregandoLocalizacao}
-            >
-              <Text style={styles.textoBotaoClaro}>
-                {carregandoLocalizacao
-                  ? 'Obtendo localização...'
-                  : coordenadas
-                    ? '✓ Localização obtida'
-                    : '📍 Obter localização GPS'}
-              </Text>
-            </TouchableOpacity>
-
-            {coordenadas && (
-              <Text style={styles.coordenadas}>
-                Latitude: {coordenadas.latitude.toFixed(6)} · Longitude:{' '}
-                {coordenadas.longitude.toFixed(6)}
-              </Text>
-            )}
-
-            <TouchableOpacity
-              style={[styles.botaoPrincipal, salvando && styles.desativado]}
-              onPress={salvarRegistro}
-              disabled={salvando}
-            >
-              <Text style={styles.textoBotaoPrincipal}>
-                {salvando ? 'Salvando...' : '💾 Salvar no diário'}
-              </Text>
-            </TouchableOpacity>
-
-            <Text style={styles.observacao}>
-              * A foto e a localização são necessárias para salvar um registro.
-            </Text>
-          </View>
-        </ScrollView>
-      ) : (
-        <FlatList
-          contentContainerStyle={styles.galeriaConteudo}
-          data={registros}
-          keyExtractor={(item) => item.id}
-          numColumns={2}
-          columnWrapperStyle={registros.length ? styles.linhaGaleria : undefined}
-          ListHeaderComponent={
-            <View style={styles.cabecalhoGaleria}>
-              <Text style={styles.tituloTela}>Minha galeria</Text>
-              <Text style={styles.textoIntro}>
-                Todas as suas lembranças em um só lugar.
-              </Text>
-            </View>
-          }
-          ListEmptyComponent={
-            <View style={styles.vazio}>
-              <Text style={styles.vazioIcone}>🖼️</Text>
-              <Text style={styles.vazioTitulo}>Sua galeria está vazia</Text>
-              <Text style={styles.vazioTexto}>
-                Registre seu primeiro lugar para ver as fotos aqui.
-              </Text>
+          {foto ? (
+            <View>
+              <Image source={{ uri: foto }} style={styles.fotoPreview} />
 
               <TouchableOpacity
-                style={styles.botaoPrincipal}
-                onPress={() => setAba('registrar')}
+                style={styles.botaoSecundario}
+                onPress={abrirCamera}
               >
-                <Text style={styles.textoBotaoPrincipal}>＋ Registrar primeiro lugar</Text>
+                <Text style={styles.textoBotaoSecundario}>
+                  Tirar outra foto
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.botaoRemoverFoto}
+                onPress={() => setFoto(null)}
+              >
+                <Text style={styles.textoRemoverFoto}>
+                  Remover fotografia
+                </Text>
               </TouchableOpacity>
             </View>
-          }
-          renderItem={({ item }) => (
+          ) : (
             <TouchableOpacity
-              style={styles.cartaoFoto}
-              onPress={() => setLugarSelecionado(item)}
-              activeOpacity={0.85}
+              style={styles.areaFoto}
+              onPress={abrirCamera}
             >
-              <Image source={{ uri: item.foto }} style={styles.miniatura} />
-
-              <View style={styles.infoFoto}>
-                <Text style={styles.nomeFoto} numberOfLines={1}>
-                  {item.titulo}
-                </Text>
-                <Text style={styles.dataFoto}>{formatarData(item.data)}</Text>
-                <Text style={styles.localFoto}>
-                  📍 {item.latitude.toFixed(3)}, {item.longitude.toFixed(3)}
-                </Text>
-              </View>
+              <Text style={styles.iconeCamera}>📷</Text>
+              <Text style={styles.textoAreaFoto}>
+                Abrir câmera
+              </Text>
+              <Text style={styles.textoAjuda}>
+                Tire uma foto do lugar visitado.
+              </Text>
             </TouchableOpacity>
           )}
-        />
+
+          <Text style={styles.rotulo}>Localização</Text>
+
+          <TouchableOpacity
+            style={styles.botaoSecundario}
+            onPress={obterLocalizacao}
+          >
+            <Text style={styles.textoBotaoSecundario}>
+              📍 Obter minha localização
+            </Text>
+          </TouchableOpacity>
+
+          {coordenadas ? (
+            <Text style={styles.textoLocalizacao}>
+              Latitude: {coordenadas.latitude.toFixed(5)}{"\n"}
+              Longitude: {coordenadas.longitude.toFixed(5)}
+            </Text>
+          ) : (
+            <Text style={styles.textoAjuda}>
+              Opcional. Você pode salvar o registro sem localização.
+            </Text>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.botaoSalvar,
+              carregando && styles.botaoDesabilitado,
+            ]}
+            onPress={salvarRegistro}
+            disabled={carregando}
+          >
+            <Text style={styles.textoBotaoSalvar}>
+              {carregando ? 'Salvando...' : 'Salvar lugar'}
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      ) : (
+        <ScrollView
+          style={styles.conteudo}
+          contentContainerStyle={styles.galeria}
+        >
+          <Text style={styles.tituloSecao}>Minha galeria</Text>
+
+          {lugares.length === 0 ? (
+            <View style={styles.vazio}>
+              <Text style={styles.iconeVazio}>🗺️</Text>
+              <Text style={styles.textoVazio}>
+                Você ainda não registrou nenhum lugar.
+              </Text>
+              <Text style={styles.textoAjuda}>
+                Seus registros aparecerão aqui.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.grade}>
+              {lugares.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.cartao}
+                  onPress={() => setLugarSelecionado(item)}
+                >
+                  <Image
+                    source={{ uri: item.foto }}
+                    style={styles.fotoCartao}
+                  />
+
+                  <View style={styles.informacoesCartao}>
+                    <Text style={styles.nomeCartao} numberOfLines={1}>
+                      {item.titulo}
+                    </Text>
+
+                    <Text style={styles.dataCartao}>
+                      {new Date(item.data).toLocaleDateString('pt-BR')}
+                    </Text>
+
+                    <Text style={styles.localCartao}>
+                      {item.latitude != null &&
+                      item.longitude != null
+                        ? '📍 Localização salva'
+                        : '📍 Sem localização'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </ScrollView>
       )}
 
       <Modal
-        visible={!!lugarSelecionado}
+        visible={cameraAberta}
         animationType="slide"
-        onRequestClose={() => setLugarSelecionado(null)}
+        onRequestClose={() => setCameraAberta(false)}
       >
-        {lugarSelecionado && (
-          <View style={styles.modalTela}>
-            <TouchableOpacity
-              style={styles.fecharModal}
-              onPress={() => setLugarSelecionado(null)}
+        <View style={styles.telaCamera}>
+          {permissaoCamera?.granted ? (
+            <CameraView
+              ref={cameraRef}
+              style={styles.camera}
+              facing="back"
             >
-              <Text style={styles.fecharModalTexto}>‹ Voltar à galeria</Text>
-            </TouchableOpacity>
+              <View style={styles.controlesCamera}>
+                <TouchableOpacity
+                  style={styles.botaoFecharCamera}
+                  onPress={() => setCameraAberta(false)}
+                >
+                  <Text style={styles.textoBotaoCamera}>Cancelar</Text>
+                </TouchableOpacity>
 
-            <ScrollView contentContainerStyle={styles.detalheConteudo}>
-              <Image
-                source={{ uri: lugarSelecionado.foto }}
-                style={styles.fotoGrande}
-              />
-
-              <Text style={styles.detalheTitulo}>{lugarSelecionado.titulo}</Text>
-
-              {!!lugarSelecionado.descricao && (
-                <Text style={styles.detalheDescricao}>
-                  {lugarSelecionado.descricao}
-                </Text>
-              )}
-
-              <View style={styles.detalheInfo}>
-                <Text style={styles.detalheInfoTexto}>
-                  📅 {formatarData(lugarSelecionado.data)}
-                </Text>
-                <Text style={styles.detalheInfoTexto}>
-                  📍 Latitude: {lugarSelecionado.latitude.toFixed(6)}
-                </Text>
-                <Text style={styles.detalheInfoTexto}>
-                  Longitude: {lugarSelecionado.longitude.toFixed(6)}
-                </Text>
+                <TouchableOpacity
+                  style={styles.botaoCapturar}
+                  onPress={capturarFoto}
+                >
+                  <View style={styles.circuloCapturar} />
+                </TouchableOpacity>
               </View>
+            </CameraView>
+          ) : (
+            <View style={styles.permissaoNegada}>
+              <Text style={styles.textoPermissao}>
+                A câmera precisa de permissão para funcionar.
+              </Text>
 
               <TouchableOpacity
-                style={styles.botaoExcluir}
-                onPress={() => excluirRegistro(lugarSelecionado.id)}
+                style={styles.botaoSalvar}
+                onPress={async () => {
+                  const resultado = await solicitarPermissaoCamera();
+
+                  if (resultado.granted) {
+                    setCameraAberta(true);
+                  } else {
+                    Alert.alert(
+                      'Permissão negada',
+                      'Autorize o acesso à câmera nas configurações do aparelho.'
+                    );
+                  }
+                }}
               >
-                <Text style={styles.textoExcluir}>Excluir registro</Text>
+                <Text style={styles.textoBotaoSalvar}>
+                  Solicitar permissão
+                </Text>
               </TouchableOpacity>
-            </ScrollView>
-          </View>
-        )}
+
+              <TouchableOpacity
+                style={styles.botaoSecundario}
+                onPress={() => setCameraAberta(false)}
+              >
+                <Text style={styles.textoBotaoSecundario}>
+                  Voltar
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
       </Modal>
-    </KeyboardAvoidingView>
+
+      <Modal
+        visible={lugarSelecionado !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setLugarSelecionado(null)}
+      >
+        <View style={styles.fundoModal}>
+          <View style={styles.conteudoModal}>
+            {lugarSelecionado && (
+              <ScrollView>
+                <Image
+                  source={{ uri: lugarSelecionado.foto }}
+                  style={styles.fotoDetalhe}
+                />
+
+                <Text style={styles.tituloDetalhe}>
+                  {lugarSelecionado.titulo}
+                </Text>
+
+                <Text style={styles.dataDetalhe}>
+                  📅 {formatarData(lugarSelecionado.data)}
+                </Text>
+
+                <Text style={styles.descricaoDetalhe}>
+                  {lugarSelecionado.descricao ||
+                    'Nenhuma descrição adicionada.'}
+                </Text>
+
+                {lugarSelecionado.latitude != null &&
+                lugarSelecionado.longitude != null ? (
+                  <Text style={styles.localDetalhe}>
+                    📍 Latitude: {lugarSelecionado.latitude.toFixed(5)}
+                    {'\n'}
+                    Longitude: {lugarSelecionado.longitude.toFixed(5)}
+                  </Text>
+                ) : (
+                  <Text style={styles.localDetalhe}>
+                    📍 Localização não registrada.
+                  </Text>
+                )}
+
+                <TouchableOpacity
+                  style={styles.botaoFecharDetalhe}
+                  onPress={() => setLugarSelecionado(null)}
+                >
+                  <Text style={styles.textoBotaoSalvar}>
+                    Fechar
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.botaoExcluir}
+                  onPress={() => excluirLugar(lugarSelecionado.id)}
+                >
+                  <Text style={styles.textoBotaoSalvar}>
+                    Excluir registro
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tela: { flex: 1, backgroundColor: '#f4f6fb' },
-  topo: {
-    backgroundColor: '#ffffff',
+  container: {
+    flex: 1,
+    backgroundColor: '#F5F7FA',
+  },
+  cabecalho: {
+    backgroundColor: '#356859',
+    paddingTop: 55,
+    paddingBottom: 22,
     paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 15,
   },
-  marca: { fontSize: 25, fontWeight: '800', color: '#233d68' },
-  subtituloTopo: { fontSize: 13, color: '#718096', marginTop: 5 },
-  abas: {
+  tituloApp: {
+    color: '#FFFFFF',
+    fontSize: 25,
+    fontWeight: 'bold',
+  },
+  subtitulo: {
+    color: '#E4F0E9',
+    fontSize: 14,
+    marginTop: 6,
+  },
+  navegacao: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#e7ebf2',
+    borderBottomColor: '#E1E6E3',
   },
-  aba: {
+  botaoNavegacao: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 15,
+  },
+  botaoAtivo: {
     borderBottomWidth: 3,
-    borderBottomColor: 'transparent',
+    borderBottomColor: '#356859',
   },
-  abaAtiva: { borderBottomColor: '#4169b2' },
-  textoAba: { color: '#7b8798', fontWeight: '700', fontSize: 13 },
-  textoAbaAtiva: { color: '#3157a4' },
-  conteudo: { padding: 16, paddingBottom: 36 },
-  introCartao: { marginBottom: 14 },
-  tituloTela: { fontSize: 23, fontWeight: '800', color: '#233d68' },
-  textoIntro: {
-    color: '#68778d',
+  textoNavegacao: {
+    color: '#66736C',
     fontSize: 14,
-    lineHeight: 21,
-    marginTop: 5,
+    fontWeight: '600',
   },
-  cartao: {
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 16,
-    elevation: 2,
+  textoAtivo: {
+    color: '#356859',
+  },
+  conteudo: {
+    flex: 1,
+  },
+  conteudoInterno: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  tituloSecao: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#263A32',
+    marginBottom: 22,
   },
   rotulo: {
-    color: '#344054',
-    fontWeight: '700',
-    marginBottom: 7,
-    marginTop: 9,
-    fontSize: 14,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#dce3ee',
-    borderRadius: 11,
-    padding: 13,
     fontSize: 15,
-    backgroundColor: '#fbfcff',
-    color: '#172033',
-  },
-  textarea: { minHeight: 82, textAlignVertical: 'top' },
-  areaFoto: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#a9bad7',
-    borderRadius: 14,
-    backgroundColor: '#f7f9fe',
-    padding: 24,
-    alignItems: 'center',
+    fontWeight: '600',
+    color: '#34473D',
+    marginBottom: 8,
     marginTop: 14,
   },
-  iconeFoto: { fontSize: 34 },
-  areaFotoTitulo: {
-    color: '#3157a4',
-    fontSize: 16,
-    fontWeight: '800',
-    marginTop: 7,
+  input: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D8E1DB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#263A32',
   },
-  areaFotoTexto: { color: '#78869b', fontSize: 12, marginTop: 4 },
-  botaoPrincipal: {
-    backgroundColor: '#3157a4',
+  inputDescricao: {
+    height: 110,
+  },
+  areaFoto: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#C7D8CE',
+    borderStyle: 'dashed',
     borderRadius: 12,
-    padding: 15,
+    minHeight: 150,
     alignItems: 'center',
-    marginTop: 12,
+    justifyContent: 'center',
+    padding: 20,
   },
-  textoBotaoPrincipal: { color: '#ffffff', fontWeight: '800', fontSize: 14 },
-  botaoClaro: {
-    backgroundColor: '#eaf0fb',
+  iconeCamera: {
+    fontSize: 36,
+    marginBottom: 8,
+  },
+  textoAreaFoto: {
+    color: '#356859',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  textoAjuda: {
+    color: '#7B8981',
+    fontSize: 13,
+    marginTop: 8,
+    lineHeight: 19,
+  },
+  fotoPreview: {
+    width: '100%',
+    height: 230,
     borderRadius: 12,
-    padding: 14,
+    marginBottom: 10,
+  },
+  botaoSecundario: {
+    backgroundColor: '#E5EFE9',
+    padding: 13,
+    borderRadius: 10,
     alignItems: 'center',
     marginTop: 10,
   },
-  textoBotaoClaro: { color: '#244780', fontWeight: '800', fontSize: 14 },
-  botaoLocalOk: { backgroundColor: '#e3f6eb' },
-  camera: {
-    height: 310,
-    borderRadius: 13,
+  textoBotaoSecundario: {
+    color: '#356859',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  botaoRemoverFoto: {
+    alignItems: 'center',
+    padding: 10,
+  },
+  textoRemoverFoto: {
+    color: '#B23B3B',
+    fontSize: 14,
+  },
+  textoLocalizacao: {
+    color: '#356859',
+    fontSize: 13,
+    marginTop: 10,
+    lineHeight: 21,
+  },
+  botaoSalvar: {
+    backgroundColor: '#356859',
+    padding: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 25,
+  },
+  botaoDesabilitado: {
+    opacity: 0.6,
+  },
+  textoBotaoSalvar: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  galeria: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  grade: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  cartao: {
+    width: '48%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
     overflow: 'hidden',
-    marginTop: 12,
-  },
-  fotoPreview: {
-    height: 240,
-    borderRadius: 13,
-    marginTop: 14,
-    resizeMode: 'cover',
-  },
-  coordenadas: {
-    color: '#536780',
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 9,
-    textAlign: 'center',
-  },
-  observacao: {
-    color: '#8490a2',
-    fontSize: 11,
-    marginTop: 12,
-    lineHeight: 17,
-  },
-  desativado: { opacity: 0.6 },
-  galeriaConteudo: {
-    paddingHorizontal: 14,
-    paddingBottom: 30,
-    flexGrow: 1,
-  },
-  cabecalhoGaleria: { paddingVertical: 19 },
-  linhaGaleria: { justifyContent: 'space-between' },
-  cartaoFoto: {
-    width: '48.5%',
-    backgroundColor: '#ffffff',
-    borderRadius: 15,
-    overflow: 'hidden',
-    marginBottom: 13,
+    marginBottom: 16,
     elevation: 2,
   },
-  miniatura: {
+  fotoCartao: {
     width: '100%',
-    height: 155,
-    backgroundColor: '#e3e8f0',
+    height: 145,
+    backgroundColor: '#E5EAE7',
   },
-  infoFoto: { padding: 10 },
-  nomeFoto: { color: '#233d68', fontSize: 15, fontWeight: '800' },
-  dataFoto: { color: '#7b8798', fontSize: 11, marginTop: 5 },
-  localFoto: { color: '#536780', fontSize: 10, marginTop: 5 },
+  informacoesCartao: {
+    padding: 10,
+  },
+  nomeCartao: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#263A32',
+  },
+  dataCartao: {
+    fontSize: 12,
+    color: '#758078',
+    marginTop: 6,
+  },
+  localCartao: {
+    fontSize: 11,
+    color: '#356859',
+    marginTop: 6,
+  },
   vazio: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 25,
-    marginTop: 8,
+    paddingVertical: 60,
+    paddingHorizontal: 20,
   },
-  vazioIcone: { fontSize: 43 },
-  vazioTitulo: {
-    color: '#233d68',
-    fontSize: 18,
-    fontWeight: '800',
-    marginTop: 12,
+  iconeVazio: {
+    fontSize: 48,
+    marginBottom: 15,
   },
-  vazioTexto: {
-    color: '#78869b',
+  textoVazio: {
+    color: '#34473D',
+    fontSize: 16,
+    fontWeight: 'bold',
     textAlign: 'center',
-    lineHeight: 20,
-    marginTop: 7,
   },
-  modalTela: { flex: 1, backgroundColor: '#f4f6fb' },
-  fecharModal: {
+  telaCamera: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  camera: {
+    flex: 1,
+  },
+  controlesCamera: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingHorizontal: 25,
+    paddingBottom: 45,
+  },
+  botaoFecharCamera: {
+    backgroundColor: '#333333',
+    paddingVertical: 12,
     paddingHorizontal: 18,
-    paddingVertical: 17,
-    backgroundColor: '#ffffff',
+    borderRadius: 25,
   },
-  fecharModalTexto: { color: '#3157a4', fontSize: 16, fontWeight: '800' },
-  detalheConteudo: { padding: 18, paddingBottom: 40 },
-  fotoGrande: {
+  textoBotaoCamera: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  botaoCapturar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circuloCapturar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#FFFFFF',
+  },
+  permissaoNegada: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 25,
+    backgroundColor: '#FFFFFF',
+  },
+  textoPermissao: {
+    color: '#263A32',
+    fontSize: 17,
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  fundoModal: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  conteudoModal: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    maxHeight: '90%',
+  },
+  fotoDetalhe: {
     width: '100%',
-    height: 360,
-    borderRadius: 17,
-    backgroundColor: '#e3e8f0',
+    height: 230,
+    borderRadius: 10,
+    marginBottom: 16,
   },
-  detalheTitulo: {
-    color: '#233d68',
-    fontSize: 26,
-    fontWeight: '800',
-    marginTop: 18,
+  tituloDetalhe: {
+    color: '#263A32',
+    fontSize: 23,
+    fontWeight: 'bold',
+    marginBottom: 8,
   },
-  detalheDescricao: {
-    color: '#4f5f75',
+  dataDetalhe: {
+    color: '#758078',
+    fontSize: 13,
+    marginBottom: 16,
+  },
+  descricaoDetalhe: {
+    color: '#34473D',
     fontSize: 15,
     lineHeight: 23,
-    marginTop: 9,
+    marginBottom: 16,
   },
-  detalheInfo: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 15,
-    marginTop: 18,
+  localDetalhe: {
+    color: '#356859',
+    fontSize: 13,
+    lineHeight: 22,
+    marginBottom: 12,
   },
-  detalheInfoTexto: { color: '#536780', fontSize: 13, marginVertical: 4 },
-  botaoExcluir: {
-    borderWidth: 1,
-    borderColor: '#efc5c5',
-    backgroundColor: '#fff5f5',
-    borderRadius: 12,
+  botaoFecharDetalhe: {
+    backgroundColor: '#356859',
     padding: 14,
+    borderRadius: 10,
     alignItems: 'center',
-    marginTop: 15,
+    marginTop: 10,
   },
-  textoExcluir: { color: '#b42318', fontWeight: '800' },
+  botaoExcluir: {
+    backgroundColor: '#B23B3B',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 8,
+  },
 });
